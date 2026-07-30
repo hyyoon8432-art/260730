@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+import urllib.parse
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -18,15 +19,14 @@ KOBIS_KEY = st.secrets["KOBIS_KEY"]
 now_korea = datetime.now(ZoneInfo("Asia/Seoul")).date()
 yesterday = now_korea - timedelta(days=1)
 
-# Sidebar 또는 메인 화면 상단에 날짜 선택 달력 추가
+# 날짜 선택 달력
 selected_date = st.date_input(
     "📅 조회할 날짜를 선택하세요",
     value=yesterday,
-    max_value=yesterday,  # 오늘 이후 날짜 선택 불가
+    max_value=yesterday,
     help="박스오피스 집계 특성상 어제 날짜까지만 조회할 수 있습니다."
 )
 
-# KOBIS API용 날짜 포맷 (YYYYMMDD)
 target_dt = selected_date.strftime("%Y%m%d")
 st.caption(f"조회 기준일: {selected_date.strftime('%Y년 %m월 %d일')}")
 
@@ -53,7 +53,6 @@ if "faultInfo" in data:
 
 box_list = data.get("boxOfficeResult", {}).get("dailyBoxOfficeList", [])
 
-# 영화 목록이 비어있는 경우 안내 문구 처리
 if not box_list:
     st.warning("그날은 아직 집계 전입니다.")
     st.stop()
@@ -63,7 +62,7 @@ df = pd.DataFrame(box_list)
 for col in ["rank", "rankInten", "audiCnt", "audiAcc", "scrnCnt", "showCnt"]:
     df[col] = pd.to_numeric(df[col])
 
-# 1. 전일 대비 순위 변동 기호 텍스트 만들기
+# 순위 변동 문자열
 def format_rank_change(val):
     if val > 0:
         return f"🔺 {val}"
@@ -74,7 +73,7 @@ def format_rank_change(val):
 
 df["순위변동"] = df["rankInten"].apply(format_rank_change)
 
-# 2. 누적 관객 100만 이상일 때 영화명 옆에 🏆 이모지 붙이기
+# 100만 관객 🏆
 def format_movie_name(row):
     if row["audiAcc"] >= 1_000_000:
         return f"🏆 {row['movieNm']}"
@@ -82,12 +81,45 @@ def format_movie_name(row):
 
 df["표시_영화명"] = df.apply(format_movie_name, axis=1)
 
+# --- 예매 확인 모달(Dialog) 정의 ---
+@st.dialog("🎟️ 예매 사이트 이동")
+def confirm_booking_dialog(movie_name):
+    # 특수문자 URLEncode (검색어 쿼리용)
+    encoded_name = urllib.parse.quote(movie_name)
+    
+    # 네이버 영화 예매/검색 또는 주요 극장 검색 URL
+    booking_url = f"https://search.naver.com/search.naver?query={encoded_name}+예매"
+
+    st.write(f"**'{movie_name}'** 영화 예매 페이지로 이동하시겠습니까?")
+    st.caption("버튼을 누르면 네이버 영화 예매 검색 페이지로 이동합니다.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        # Streamlit 외부 링크 버튼
+        st.link_button("⭕ 예 (이동하기)", booking_url, use_container_width=True, type="primary")
+    with col2:
+        if st.button("❌ 아니오 (닫기)", use_container_width=True):
+            st.rerun()
+
 # 1위 영화 지표 카드
 top = df.sort_values("rank").iloc[0]
 c1, c2, c3 = st.columns(3)
 c1.metric("해당 일자 1위", top["표시_영화명"])
 c2.metric("당일 관객수", f"{top['audiCnt']:,}명")
 c3.metric("누적 관객수", f"{top['audiAcc']:,}명")
+
+st.divider()
+
+# --- 🎟️ 영화 예매 선택 영역 ---
+st.subheader("🎟️ 영화 예매하기")
+movie_options = df["movieNm"].tolist()
+selected_movie = st.selectbox(
+    "예매하고 싶은 영화를 선택해 주세요:",
+    options=["영화 선택..."] + movie_options
+)
+
+if selected_movie != "영화 선택...":
+    confirm_booking_dialog(selected_movie)
 
 st.divider()
 
@@ -109,6 +141,5 @@ st.dataframe(
 )
 
 st.subheader("📈 관객수 상위 5편")
-# 차트 표시용 영화명 사용 (순위 정렬 기준)
 top5 = df.sort_values("rank").head(5)
 st.bar_chart(top5.set_index("표시_영화명")["audiCnt"])
