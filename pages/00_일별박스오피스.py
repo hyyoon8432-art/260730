@@ -52,8 +52,10 @@ if "faultInfo" in data:
     st.stop()
 
 box_list = data.get("boxOfficeResult", {}).get("dailyBoxOfficeList", [])
+
+# 영화 목록이 비어있는 경우 안내 문구 처리
 if not box_list:
-    st.warning("선택하신 날짜의 박스오피스 데이터가 없습니다. 다른 날짜를 선택해 주세요.")
+    st.warning("그날은 아직 집계 전입니다.")
     st.stop()
 
 # 데이터 전처리
