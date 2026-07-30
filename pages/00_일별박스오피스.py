@@ -60,21 +60,40 @@ if not box_list:
 
 # 데이터 전처리
 df = pd.DataFrame(box_list)
-for col in ["rank", "audiCnt", "audiAcc", "scrnCnt", "showCnt"]:
+for col in ["rank", "rankInten", "audiCnt", "audiAcc", "scrnCnt", "showCnt"]:
     df[col] = pd.to_numeric(df[col])
+
+# 1. 전일 대비 순위 변동 기호 텍스트 만들기
+def format_rank_change(val):
+    if val > 0:
+        return f"🔺 {val}"
+    elif val < 0:
+        return f"🔻 {abs(val)}"
+    else:
+        return "-"
+
+df["순위변동"] = df["rankInten"].apply(format_rank_change)
+
+# 2. 누적 관객 100만 이상일 때 영화명 옆에 🏆 이모지 붙이기
+def format_movie_name(row):
+    if row["audiAcc"] >= 1_000_000:
+        return f"🏆 {row['movieNm']}"
+    return row["movieNm"]
+
+df["표시_영화명"] = df.apply(format_movie_name, axis=1)
 
 # 1위 영화 지표 카드
 top = df.sort_values("rank").iloc[0]
 c1, c2, c3 = st.columns(3)
-c1.metric("해당 일자 1위", top["movieNm"])
+c1.metric("해당 일자 1위", top["표시_영화명"])
 c2.metric("당일 관객수", f"{top['audiCnt']:,}명")
 c3.metric("누적 관객수", f"{top['audiAcc']:,}명")
 
 st.divider()
 
 # 표 구성
-table = df[["rank", "movieNm", "openDt", "audiCnt", "audiAcc", "scrnCnt"]].copy()
-table.columns = ["순위", "영화명", "개봉일", "관객수", "누적관객", "스크린수"]
+table = df[["rank", "순위변동", "표시_영화명", "openDt", "audiCnt", "audiAcc", "scrnCnt"]].copy()
+table.columns = ["순위", "변동", "영화명", "개봉일", "관객수", "누적관객", "스크린수"]
 table = table.sort_values("순위").reset_index(drop=True)
 
 st.subheader(f"📋 {selected_date.strftime('%Y-%m-%d')} 박스오피스 TOP 10")
@@ -90,5 +109,6 @@ st.dataframe(
 )
 
 st.subheader("📈 관객수 상위 5편")
-top5 = table.sort_values("관객수", ascending=False).head(5)
-st.bar_chart(top5.set_index("영화명")["관객수"])
+# 차트 표시용 영화명 사용 (순위 정렬 기준)
+top5 = df.sort_values("rank").head(5)
+st.bar_chart(top5.set_index("표시_영화명")["audiCnt"])
