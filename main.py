@@ -1,202 +1,38 @@
-import pandas as pd
-import plotly.express as px
-import requests
-import streamlit as st
+전국 초·중·고 학령인구(7~18세) 변화율 지도를 보여 주는 스트림릿 앱 하나(main.py)를 만들어 줘. 스트림릿 클라우드에 올릴 거야.
+2015년 대비 가장 최신 연도의 시군구별 초·중·고 전체 학령인구 변화율(%)을 색으로 칠한 단계구분도야.
 
-# 1. 페이지 기본 설정
-st.set_page_config(
-    page_title="전국 고교 학령인구 감소율 지도", layout="wide"
-)
-st.title("🎓 전국 시군구별 고교 학령인구(16~18세) 감소율 지도")
-st.caption(
-    "2015년 대비 최신 연도의 시군구별 고교 학령인구 변화율(%) 단계구분도"
-)
+■ 인구 데이터
+- 주소: https://raw.githubusercontent.com/greatsong/modudata/main/data/population_yearly.csv.gz
+- 2015~2026년 전국 읍·면·동 인구야. 2015년 데이터와 가장 최신 연도 데이터를 비교해 줘.
+- 열은 연도 · 시도 · 시군구 · 동 · 코드, 그리고 나이별 인구 열이야.
+- 나이별 열 이름은 '계_0세' · '남_0세' · '여_0세' 형식으로 나이마다 셋씩 있고 '계_100세 이상'까지 이어져.
+  '계_'가 남녀를 합친 값이야.
+- 초1~고3 전체 학령인구는 '계_7세'부터 '계_18세'까지 총 12개 열의 합으로 계산해 줘.
+  (참고: 초등 7~12세, 중등 13~15세, 고등 16~18세)
+- '코드'는 행정동 코드 열 자리야. 계산할 숫자가 아니라 이름표니까 반드시 글자로 읽어.
+  앞 5자리를 잘라 시군구를 찾는 데 써야 하거든.
+- 인구는 읍·면·동 단위야. '코드' 앞 5자리가 시군구를 가리켜. 시군구별로 7~18세 인구를 합산해서 2015년 대비 최신 연도의 변화율(%)을 구해 줘.
+  (변화율 = (최신연도 학령인구 - 2015년 학령인구) / 2015년 학령인구 * 100)
 
+■ 지도 경계 데이터
+- 주소: https://raw.githubusercontent.com/greatsong/modudata/main/data/boundaries/sigungu_kr.geojson
+- 전국 시군구 255개의 경계가 들어 있는 GeoJSON이야.
+- 지역마다 속성이 세 개야: '코드'(5자리) · '시군구' · '시도'.
 
-# 2. 데이터 로딩 함수 (streamlit cache 적용으로 빠른 로딩)
-@st.cache_data
-def load_population_data():
-    url = "https://raw.githubusercontent.com/greatsong/modudata/main/data/population_yearly.csv.gz"
-    # 코드는 앞 5자리 추출을 위해 반드시 문자열(dtype=str)로 지정해서 불러옵니다.
-    df = pd.read_csv(url, compression="gzip", dtype={"코드": str})
-    return df
+■ 지도
+- 지역은 이름이 아니라 '코드'로 맞춰 줘. 이름으로 맞추면 '남구'처럼 여러 시도에 같은 이름이 있어서 어긋나.
+- 배경 지도 타일 없이 경계선만 보이게.
+- 색은 이어지는 그라데이션 말고 5단계로 끊어 줘. 감소폭이 클수록 진한 색, 감소폭이 적거나 증가한 곳은 옅은 색으로 표현해 줘.
+  구간 경계값: -40% 미만, -40% 이상 ~ -30% 미만, -30% 이상 ~ -20% 미만, -20% 이상 ~ -10% 미만, -10% 이상.
+- 범례에 각 단계의 비율 구간이 글자로 보이게. 예: '-40% 미만(급감)', '-10% 이상'.
+- 마우스를 올리면 시군구 이름 · 시도 · 2015년 학령인구 수 · 최신년도 학령인구 수 · 변화율(%)이 보이게.
+- 지도 아래에 두 개의 표를 나란히 보여 줘:
+  1) 초·중·고 학령인구 감소율이 가장 큰 지역 TOP 10 (학교 통폐합 및 지역 소멸 위험 지역)
+  2) 초·중·고 학령인구 감소율이 적거나 증가한 지역 TOP 10 (신도시 유입 지역 등)
+- 화면 맨 아래에는 초·중·고 학령인구 감소가 교원 수 축소, 지방 소규모 학교 통폐합, 지역 교육 인프라 해체 및 지역 소멸에 미치는 영향과 대안을 정리한 요약 안내 상자(info box)를 넣어 줘.
 
-
-@st.cache_data
-def load_geojson_data():
-    geojson_url = "https://raw.githubusercontent.com/greatsong/modudata/main/data/boundaries/sigungu_kr.geojson"
-    response = requests.get(geojson_url)
-    return response.json()
-
-
-# 데이터 로딩 상태 표시
-with st.spinner("인구 및 지도 경계 데이터를 불러오는 중입니다..."):
-    pop_df = load_population_data()
-    geojson_data = load_geojson_data()
-
-
-# 3. 데이터 가공 및 고교 학령인구(16~18세) 계산
-# 행정동 코드(10자리)의 앞 5자리를 잘라서 시군구 코드로 사용
-pop_df["sigungu_code"] = pop_df["코드"].str[:5]
-
-# 고교 학령인구 열(계_16세, 계_17세, 계_18세)의 합계 계산
-hs_cols = ["계_16세", "계_17세", "계_18세"]
-pop_df["고교생인구"] = pop_df[hs_cols].sum(axis=1)
-
-# 기준 연도(2015년) 및 최신 연도 자동 도출
-year_min = 2015
-year_max = pop_df["연도"].max()
-
-# 2015년 시군구별 고교생 인구 집계
-df_2015 = (
-    pop_df[pop_df["연도"] == year_min]
-    .groupby("sigungu_code")["고교생인구"]
-    .sum()
-    .reset_index()
-    .rename(columns={"고교생인구": "고교생_2015"})
-)
-
-# 최신 연도 시군구별 고교생 인구 집계 (시도, 시군구 이름 포함)
-df_latest = (
-    pop_df[pop_df["연도"] == year_max]
-    .groupby("sigungu_code")
-    .agg({"시도": "first", "시군구": "first", "고교생인구": "sum"})
-    .reset_index()
-    .rename(columns={"고교생인구": f"고교생_{year_max}"})
-)
-
-# 두 연도 데이터 병합
-merged_df = pd.merge(df_latest, df_2015, on="sigungu_code", how="inner")
-
-# 감소율(%) 계산: (최신인구 - 2015년인구) / 2015년인구 * 100
-merged_df["감소율"] = (
-    (merged_df[f"고교생_{year_max}"] - merged_df["고교생_2015"])
-    / merged_df["고교생_2015"]
-    * 100
-).round(1)
-
-
-# 4. 5단계 범례 구간 지정
-# 구간: -40% 미만, -40%~-30%, -30%~-20%, -20%~-10%, -10% 이상
-bins = [-float("inf"), -40, -30, -20, -10, float("inf")]
-labels = [
-    "-40% 미만(급감)",
-    "-40% 이상 ~ -30% 미만",
-    "-30% 이상 ~ -20% 미만",
-    "-20% 이상 ~ -10% 미만",
-    "-10% 이상",
-]
-
-merged_df["감소율_구간"] = pd.cut(
-    merged_df["감소율"], bins=bins, labels=labels
-)
-
-
-# 5. Plotly 단계구분도(Choropleth) 시각화
-# 감소폭이 클수록 진한 색(Reds 계열)
-color_discrete_map = {
-    "-40% 미만(급감)": "#67000d",
-    "-40% 이상 ~ -30% 미만": "#a50f15",
-    "-30% 이상 ~ -20% 미만": "#e31a1c",
-    "-20% 이상 ~ -10% 미만": "#fc4e2a",
-    "-10% 이상": "#fcbba1",
-}
-
-fig = px.choropleth_mapbox(
-    merged_df,
-    geojson=geojson_data,
-    locations="sigungu_code",
-    featureidkey="properties.코드",  # GeoJSON 내 시군구 코드 속성 매칭
-    color="감소율_구간",
-    color_discrete_map=color_discrete_map,
-    category_orders={"감소율_구간": labels},  # 범례 순서 정렬
-    mapbox_style="white-bg",  # 배경지도 타일 없이 경계선만 표시
-    center={"lat": 35.8, "lon": 127.8},  # 대한민국 중심 좌표
-    zoom=6.1,
-    hover_name="시군구",
-    hover_data={
-        "시도": True,
-        "고교생_2015": ":,명",
-        f"고교생_{year_max}": ":,명",
-        "감소율": ":.1f%",
-        "sigungu_code": False,
-    },
-    labels={
-        "감소율_구간": "감소율 구간",
-        "고교생_2015": "2015년 고교생 수",
-        f"고교생_{year_max}": f"{year_max}년 고교생 수",
-        "감소율": "감소율(%)",
-    },
-)
-
-# 지도 레이아웃 세부 조절
-fig.update_layout(
-    margin={"r": 0, "t": 20, "l": 0, "b": 0},
-    legend=dict(
-        title=f"<b>고교생 감소율 ({year_min} vs {year_max})</b>",
-        yanchor="top",
-        y=0.98,
-        xanchor="left",
-        x=0.02,
-        bgcolor="rgba(255, 255, 255, 0.8)",
-    ),
-)
-
-# 지도 출력
-st.plotly_chart(fig, use_container_width=True)
-
-st.markdown("---")
-
-
-# 6. 하단 상위/하위 10개 지역 표 나란히 표시
-st.subheader(
-    f"📊 {year_min}년 대비 {year_max}년 고교 학령인구 변화 상위/하위 10개 지역"
-)
-
-col1, col2 = st.columns(2)
-
-# 감소율이 가장 큰 지역 TOP 10 (감소율 오름차순)
-top_decrease = (
-    merged_df.sort_values(by="감소율", ascending=True)
-    .head(10)[["시도", "시군구", "고교생_2015", f"고교생_{year_max}", "감소율"]]
-    .reset_index(drop=True)
-)
-top_decrease.index = top_decrease.index + 1
-
-# 감소율이 적거나 증가한 지역 TOP 10 (감소율 내림차순)
-top_stable = (
-    merged_df.sort_values(by="감소율", ascending=False)
-    .head(10)[["시도", "시군구", "고교생_2015", f"고교생_{year_max}", "감소율"]]
-    .reset_index(drop=True)
-)
-top_stable.index = top_stable.index + 1
-
-with col1:
-    st.write(
-        "🔴 **고교생 인구 감소율이 가장 큰 지역 TOP 10** (대학 미달 및 상권 위축 위험)"
-    )
-    st.dataframe(top_decrease, use_container_width=True)
-
-with col2:
-    st.write("🟢 **고교생 인구 감소율이 적거나 증가한 지역 TOP 10**")
-    st.dataframe(top_stable, use_container_width=True)
-
-st.markdown("---")
-
-
-# 7. 요약 안내 상자 (Info Box)
-st.info(f"""
-### 💡 고교 학령인구 감소가 가져올 미래 변화와 대안
-
-1. **지방 대학 입시 자원 부족 및 미달 사태**
-   - 고교 학령인구의 급감은 지방 소재 대학의 신입생 충원율에 직접적인 타격을 줍니다.
-   - 입학 정원 미달 현상이 심화되면서 일부 지방 대학의 폐교 및 학과 구조조정이 가속화되고 있습니다.
-
-2. **대학가 상권 침체 및 지역 경제 위축**
-   - 대학생 유동인구에 의존하던 원룸촌, 식당가, 유흥가 등 대학가 상권의 매출이 급감합니다.
-   - 이는 청년층 인구의 이탈을 촉진하며, 지역 상권 쇠퇴와 지방 소멸 위험으로 직결됩니다.
-
-3. **대응 과제 및 해결 방안**
-   - **지자체-대학 협력(RIS 사업):** 지역 산업과 연계한 특성화 교육을 강화하여 지역 정주 인구를 늘려야 합니다.
-   - **외국인 유학생 유치 및 평생교육 전환:** 학령인구 이외의 유학생 및 성인 학습자를 대상으로 한 교육 모델 전환이 필요합니다.
-""")
+■ 규칙
+- 한국어 라벨, 초보자용 한국어 주석.
+- 저장소에 requirements.txt를 이미 만들어 뒀어. plotly와 requests가 들어 있어.
+  더 필요한 게 있으면 이름만 알려 줘. 스트림릿·판다스·넘파이는 기본 설치라 빼고.
+- main.py 전체 코드를 한 번에 줘.
